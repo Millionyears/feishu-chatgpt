@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"start-feishubot/logger"
+
 	larkcard "github.com/larksuite/oapi-sdk-go/v3/card"
 )
 
@@ -22,14 +24,18 @@ func NewCardHandler(m MessageHandler) CardHandlerFunc {
 		NewPicModeChangeHandler,
 		NewRoleTagCardHandler,
 		NewRoleCardHandler,
+		NewAIModeCardHandler,
 	}
 
 	return func(ctx context.Context, cardAction *larkcard.CardAction) (interface{}, error) {
 		var cardMsg CardMsg
 		actionValue := cardAction.Action.Value
 		actionValueJson, _ := json.Marshal(actionValue)
-		json.Unmarshal(actionValueJson, &cardMsg)
+		if err := json.Unmarshal(actionValueJson, &cardMsg); err != nil {
+			return nil, err
+		}
 		//pp.Println(cardMsg)
+		logger.Debug("cardMsg ", cardMsg)
 		for _, handler := range handlers {
 			h := handler(cardMsg, m)
 			i, err := h(ctx, cardAction)

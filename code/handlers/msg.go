@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"github.com/google/uuid"
-	larkcard "github.com/larksuite/oapi-sdk-go/v3/card"
-	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	"start-feishubot/logger"
+
 	"start-feishubot/initialization"
 	"start-feishubot/services"
 	"start-feishubot/services/openai"
+
+	"github.com/google/uuid"
+	larkcard "github.com/larksuite/oapi-sdk-go/v3/card"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 type CardKind string
@@ -24,6 +28,7 @@ var (
 	PicVarMoreKind     = CardKind("pic_var_more")     // 变量图片
 	RoleTagsChooseKind = CardKind("role_tags_choose") // 内置角色所属标签选择
 	RoleChooseKind     = CardKind("role_choose")      // 内置角色选择
+	AIModeChooseKind   = CardKind("ai_mode_choose")   // AI模式选择
 )
 
 var (
@@ -66,8 +71,8 @@ func replyCard(ctx context.Context,
 
 	// 服务端错误处理
 	if !resp.Success() {
-		fmt.Println(resp.Code, resp.Msg, resp.RequestId())
-		return err
+		logger.Errorf("服务端错误 resp code[%v], msg [%v] requestId [%v] ", resp.Code, resp.Msg, resp.RequestId())
+		return errors.New(resp.Msg)
 	}
 	return nil
 }
@@ -350,6 +355,7 @@ func withPicResolutionBtn(sessionID *string) larkcard.
 		Build()
 	return actions
 }
+
 func withRoleTagsBtn(sessionID *string, tags ...string) larkcard.
 	MessageCardElement {
 	var menuOptions []MenuOption
@@ -404,6 +410,32 @@ func withRoleBtn(sessionID *string, titles ...string) larkcard.
 	return actions
 }
 
+func withAIModeBtn(sessionID *string, aiModeStrs []string) larkcard.MessageCardElement {
+	var menuOptions []MenuOption
+	for _, label := range aiModeStrs {
+		menuOptions = append(menuOptions, MenuOption{
+			label: label,
+			value: label,
+		})
+	}
+
+	cancelMenu := newMenu("选择模式",
+		map[string]interface{}{
+			"value":     "0",
+			"kind":      AIModeChooseKind,
+			"sessionId": *sessionID,
+			"msgId":     *sessionID,
+		},
+		menuOptions...,
+	)
+
+	actions := larkcard.NewMessageCardAction().
+		Actions([]larkcard.MessageCardActionElement{cancelMenu}).
+		Layout(larkcard.MessageCardActionLayoutFlow.Ptr()).
+		Build()
+	return actions
+}
+
 func replyMsg(ctx context.Context, msg string, msgId *string) error {
 	msg, i := processMessage(msg)
 	if i != nil {
@@ -432,7 +464,7 @@ func replyMsg(ctx context.Context, msg string, msgId *string) error {
 	// 服务端错误处理
 	if !resp.Success() {
 		fmt.Println(resp.Code, resp.Msg, resp.RequestId())
-		return err
+		return errors.New(resp.Msg)
 	}
 	return nil
 }
@@ -461,10 +493,11 @@ func uploadImage(base64Str string) (*string, error) {
 	// 服务端错误处理
 	if !resp.Success() {
 		fmt.Println(resp.Code, resp.Msg, resp.RequestId())
-		return nil, err
+		return nil, errors.New(resp.Msg)
 	}
 	return resp.Data.ImageKey, nil
 }
+
 func replyImage(ctx context.Context, ImageKey *string,
 	msgId *string) error {
 	//fmt.Println("sendMsg", ImageKey, msgId)
@@ -495,10 +528,9 @@ func replyImage(ctx context.Context, ImageKey *string,
 	// 服务端错误处理
 	if !resp.Success() {
 		fmt.Println(resp.Code, resp.Msg, resp.RequestId())
-		return err
+		return errors.New(resp.Msg)
 	}
 	return nil
-
 }
 
 func replayImageCardByBase64(ctx context.Context, base64Str string,
@@ -580,10 +612,11 @@ func sendMsg(ctx context.Context, msg string, chatId *string) error {
 	// 服务端错误处理
 	if !resp.Success() {
 		fmt.Println(resp.Code, resp.Msg, resp.RequestId())
-		return err
+		return errors.New(resp.Msg)
 	}
 	return nil
 }
+
 func sendClearCacheCheckCard(ctx context.Context,
 	sessionId *string, msgId *string) {
 	newCard, _ := newSendCard(
@@ -645,6 +678,8 @@ func sendHelpCard(ctx context.Context,
 				"chatType":  UserChatType,
 				"sessionId": *sessionId,
 			}, larkcard.MessageCardButtonTypeDanger)),
+		withSplitLine(),
+		withMainMd("🤖 **AI模式选择** \n"+" 文本回复 *AI模式* 或 */ai_mode*"),
 		withSplitLine(),
 		withMainMd("🛖 **内置角色列表** \n"+" 文本回复 *角色列表* 或 */roles*"),
 		withSplitLine(),
@@ -724,7 +759,10 @@ func SendRoleTagsCard(ctx context.Context,
 		withHeader("🛖 请选择角色类别", larkcard.TemplateIndigo),
 		withRoleTagsBtn(sessionId, roleTags...),
 		withNote("提醒：选择角色所属分类，以便我们为您推荐更多相关角色。"))
-	replyCard(ctx, msgId, newCard)
+	err := replyCard(ctx, msgId, newCard)
+	if err != nil {
+		logger.Errorf("选择角色出错 %v", err)
+	}
 }
 
 func SendRoleListCard(ctx context.Context,
@@ -733,5 +771,14 @@ func SendRoleListCard(ctx context.Context,
 		withHeader("🛖 角色列表"+" - "+roleTag, larkcard.TemplateIndigo),
 		withRoleBtn(sessionId, roleList...),
 		withNote("提醒：选择内置场景，快速进入角色扮演模式。"))
+	replyCard(ctx, msgId, newCard)
+}
+
+func SendAIModeListsCard(ctx context.Context,
+	sessionId *string, msgId *string, aiModeStrs []string) {
+	newCard, _ := newSendCard(
+		withHeader("🤖 AI模式选择", larkcard.TemplateIndigo),
+		withAIModeBtn(sessionId, aiModeStrs),
+		withNote("提醒：选择内置模式，让AI更好的理解您的需求。"))
 	replyCard(ctx, msgId, newCard)
 }
